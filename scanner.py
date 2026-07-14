@@ -40,56 +40,102 @@ TIMEFRAME_MAP = {
     '1d': '1d', '1w': '1w',
 }
 
-BINANCE_FUTURES_URL = 'https://fapi.binance.com/fapi/v1/klines'
-BINANCE_SPOT_URL = 'https://api.binance.com/api/v3/klines'
+# Binance API 镜像节点（GitHub Actions 可能被主站封IP，多节点自动切换）
+BINANCE_ENDPOINTS = [
+    # (期货API, 现货API, 标签)
+    ('https://fapi.binance.com/fapi/v1/klines', 'https://api.binance.com/api/v3/klines', 'Binance主站'),
+    ('https://api1.binance.com/api/v3/klines', 'https://api1.binance.com/api/v3/klines', 'Binance-API1'),
+    ('https://api2.binance.com/api/v3/klines', 'https://api2.binance.com/api/v3/klines', 'Binance-API2'),
+    ('https://api3.binance.com/api/v3/klines', 'https://api3.binance.com/api/v3/klines', 'Binance-API3'),
+    ('https://api.binance.us/api/v3/klines', 'https://api.binance.us/api/v3/klines', 'Binance-US'),
+]
+
+# 备用：Bybit 数据源（ETHUSDT, BTCUSDT 等主流币）
+BYBIT_URL = 'https://api.bybit.com/v5/market/kline'
+
+
+def _fetch_binance(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """尝试所有 Binance 节点"""
+    for futures_url, spot_url, label in BINANCE_ENDPOINTS:
+        for url in [futures_url, spot_url]:
+            try:
+                resp = requests.get(url, params={
+                    'symbol': symbol, 'interval': interval, 'limit': limit
+                }, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        print(f"  ✅ {label}: {symbol} {len(data)} 根K线")
+                        df = pd.DataFrame(data, columns=[
+                            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+                            'taker_buy_quote', 'ignore'
+                        ])
+                        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+                        df['timestamp'] = df['timestamp'].astype('int64')
+                        for col in ['open', 'high', 'low', 'close', 'volume']:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                        return df
+                elif resp.status_code == 400:
+                    break  # 交易对不存在，换节点
+            except Exception:
+                continue
+    return None
+
+
+def _fetch_bybit(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """从 Bybit 获取 K 线（备用数据源）"""
+    # Bybit 使用不同的交易对名称
+    bybit_interval = {'1m': '1', '3m': '3', '5m': '5', '15m': '15',
+                      '30m': '30', '1h': '60', '4h': '240', '1d': 'D'}.get(interval, '15')
+    try:
+        resp = requests.get(BYBIT_URL, params={
+            'category': 'linear',
+            'symbol': symbol,
+            'interval': bybit_interval,
+            'limit': limit,
+        }, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('retCode') == 0 and data['result'].get('list'):
+                klines = data['result']['list']
+                klines.reverse()  # Bybit 返回最新的在前
+                rows = []
+                for k in klines:
+                    rows.append({
+                        'timestamp': int(k[0]),
+                        'open': float(k[1]),
+                        'high': float(k[2]),
+                        'low': float(k[3]),
+                        'close': float(k[4]),
+                        'volume': float(k[5]),
+                    })
+                df = pd.DataFrame(rows)
+                print(f"  ✅ Bybit: {symbol} {len(df)} 根K线")
+                return df
+    except Exception:
+        pass
+    return None
 
 
 def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 300) -> pd.DataFrame:
     """
-    从 Binance 获取 OHLCV 数据（优先期货，fallback 现货）
-
-    Args:
-        symbol: 交易对（如 ETHUSDT）
-        timeframe: K线周期
-        limit: K线数量
-    Returns:
-        DataFrame with columns [timestamp, open, high, low, close, volume]
+    多数据源获取 OHLCV 数据
+    优先级: Binance 多节点 → Bybit
     """
     interval = TIMEFRAME_MAP.get(timeframe, '15m')
 
-    # 先尝试期货 API
-    for url, market_type in [(BINANCE_FUTURES_URL, '期货'), (BINANCE_SPOT_URL, '现货')]:
-        try:
-            resp = requests.get(url, params={
-                'symbol': symbol,
-                'interval': interval,
-                'limit': limit,
-            }, timeout=15)
+    # 1. 尝试 Binance 所有节点
+    df = _fetch_binance(symbol, interval, limit)
+    if df is not None:
+        return df
 
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list) and len(data) > 0:
-                    print(f"  ✅ {market_type} {symbol}: {len(data)} 根K线")
-                    df = pd.DataFrame(data, columns=[
-                        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                        'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-                        'taker_buy_quote', 'ignore'
-                    ])
-                    df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-                    df['timestamp'] = df['timestamp'].astype('int64')
-                    for col in ['open', 'high', 'low', 'close', 'volume']:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                    return df
-                else:
-                    # 可能是错误响应，尝试下一个数据源
-                    continue
-            elif resp.status_code == 400:
-                # 交易对不存在，跳过
-                continue
-        except Exception as e:
-            continue
+    # 2. 备用：Bybit（主流币）
+    df = _fetch_bybit(symbol, interval, limit)
+    if df is not None:
+        return df
 
-    print(f"  ❌ {symbol}: 期货和现货均获取失败")
+    print(f"  ❌ {symbol}: 所有数据源均获取失败")
     return None
 
 
