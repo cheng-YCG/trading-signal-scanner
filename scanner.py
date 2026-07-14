@@ -67,6 +67,17 @@ WORKER_PROXY = 'https://tradingview-feishu.hongji1142317442.workers.dev/binance-
 
 
 BYBIT_URL = 'https://api.bybit.com/v5/market/kline'
+OKX_URL = 'https://www.okx.com/api/v5/market/candles'
+
+# OKX 交易对映射（仅主流币，股票代币OKX没有）
+OKX_SYMBOLS = {
+    'ETHUSDT': 'ETH-USDT-SWAP',
+    'BTCUSDT': 'BTC-USDT-SWAP',
+}
+
+# OKX K线周期映射
+OKX_BAR_MAP = {'1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m',
+               '30m': '30m', '1h': '1H', '4h': '4H', '1d': '1D'}
 
 
 def _parse_klines(data: list, source_label: str) -> pd.DataFrame:
@@ -158,6 +169,40 @@ def _fetch_bybit(symbol: str, interval: str, limit: int) -> pd.DataFrame:
     return None
 
 
+def _fetch_okx(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """从 OKX 获取 K 线（公开 API，GitHub Actions 可用）"""
+    okx_symbol = OKX_SYMBOLS.get(symbol)
+    if not okx_symbol:
+        return None
+    okx_bar = OKX_BAR_MAP.get(interval, '15m')
+    try:
+        resp = requests.get(OKX_URL, params={
+            'instId': okx_symbol, 'bar': okx_bar, 'limit': limit
+        }, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('code') == '0' and data.get('data'):
+                # OKX 返回最新在前，需要反转，且字段顺序不同
+                # [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+                rows = []
+                for k in reversed(data['data']):
+                    rows.append({
+                        'timestamp': int(k[0]),
+                        'open': float(k[1]),
+                        'high': float(k[2]),
+                        'low': float(k[3]),
+                        'close': float(k[4]),
+                        'volume': float(k[5]),
+                    })
+                df = pd.DataFrame(rows)
+                if len(df) > 0:
+                    print(f"  ✅ OKX: {symbol} {len(df)} 根K线")
+                    return df
+    except Exception:
+        pass
+    return None
+
+
 def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 300) -> pd.DataFrame:
     """
     多数据源获取 OHLCV 数据
@@ -170,12 +215,17 @@ def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 300) -> pd.Dat
     if df is not None:
         return df
 
-    # 2. 备用：Bybit（ETHUSDT, BTCUSDT 等主流币）
+    # 2. OKX 公开 API（GitHub Actions 不封）
+    df = _fetch_okx(symbol, interval, limit)
+    if df is not None:
+        return df
+
+    # 3. Bybit 备用
     df = _fetch_bybit(symbol, interval, limit)
     if df is not None:
         return df
 
-    print(f"  ❌ {symbol}: Binance/Bybit 均获取失败")
+    print(f"  ❌ {symbol}: 所有数据源获取失败 (Binance/OKX/Bybit)")
     return None
 
 
