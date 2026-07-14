@@ -24,4 +24,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 运行扫描
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: python scanner.py
