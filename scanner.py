@@ -10,6 +10,7 @@ import sys
 import io
 import time
 from datetime import datetime, timezone, timedelta
+from time import sleep
 
 # 北京时间 (UTC+8)
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -43,14 +44,22 @@ TIMEFRAME_MAP = {
     '1d': '1d', '1w': '1w',
 }
 
-# Binance API 镜像节点（GitHub Actions 可能被主站封IP，多节点自动切换）
+# Binance API 所有已知端点（GitHub Actions IP 可能被主站封，穷举切换）
 BINANCE_ENDPOINTS = [
-    # (期货API, 现货API, 标签)
-    ('https://fapi.binance.com/fapi/v1/klines', 'https://api.binance.com/api/v3/klines', 'Binance主站'),
-    ('https://api1.binance.com/api/v3/klines', 'https://api1.binance.com/api/v3/klines', 'Binance-API1'),
-    ('https://api2.binance.com/api/v3/klines', 'https://api2.binance.com/api/v3/klines', 'Binance-API2'),
-    ('https://api3.binance.com/api/v3/klines', 'https://api3.binance.com/api/v3/klines', 'Binance-API3'),
-    ('https://api.binance.us/api/v3/klines', 'https://api.binance.us/api/v3/klines', 'Binance-US'),
+    # 期货
+    ('https://fapi.binance.com/fapi/v1/klines', '期货'),
+    ('https://fapi.binance.com/fapi/v2/klines', '期货v2'),
+    # 现货主站
+    ('https://api.binance.com/api/v3/klines', '现货主站'),
+    ('https://api.binance.com/api/v3/uiKlines', '现货UI'),
+    # 镜像节点
+    ('https://api1.binance.com/api/v3/klines', '镜像1'),
+    ('https://api2.binance.com/api/v3/klines', '镜像2'),
+    ('https://api3.binance.com/api/v3/klines', '镜像3'),
+    # www 子域名
+    ('https://www.binance.com/api/v3/klines', 'WWW'),
+    # 币安云
+    ('https://api-gcp.binance.com/api/v3/klines', 'GCP'),
 ]
 
 # Cloudflare Worker 代理（解决 GitHub Actions IP 被封问题）
@@ -92,9 +101,9 @@ def _fetch_via_proxy(symbol: str, interval: str, limit: int) -> pd.DataFrame:
 
 
 def _fetch_binance(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    """尝试所有 Binance 节点"""
-    for futures_url, spot_url, label in BINANCE_ENDPOINTS:
-        for url in [futures_url, spot_url]:
+    """尝试所有 Binance 节点，每个重试2次"""
+    for url, label in BINANCE_ENDPOINTS:
+        for attempt in range(2):
             try:
                 resp = requests.get(url, params={
                     'symbol': symbol, 'interval': interval, 'limit': limit
@@ -105,9 +114,12 @@ def _fetch_binance(symbol: str, interval: str, limit: int) -> pd.DataFrame:
                         print(f"  ✅ {label}: {symbol} {len(data)} 根K线")
                         return _parse_klines(data, label)
                 elif resp.status_code == 400:
-                    break  # 交易对不存在，换节点
+                    break  # 交易对不存在
+                elif resp.status_code == 451:
+                    break  # 地域限制
             except Exception:
-                continue
+                if attempt == 0:
+                    sleep(0.5)
     return None
 
 
@@ -153,22 +165,17 @@ def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 300) -> pd.Dat
     """
     interval = TIMEFRAME_MAP.get(timeframe, '15m')
 
-    # 1. 尝试 Binance 所有节点（直连）
+    # 1. 尝试 Binance 所有节点
     df = _fetch_binance(symbol, interval, limit)
     if df is not None:
         return df
 
-    # 2. 通过 Cloudflare Worker 代理
-    df = _fetch_via_proxy(symbol, interval, limit)
-    if df is not None:
-        return df
-
-    # 3. 备用：Bybit（仅主流币有）
+    # 2. 备用：Bybit（ETHUSDT, BTCUSDT 等主流币）
     df = _fetch_bybit(symbol, interval, limit)
     if df is not None:
         return df
 
-    print(f"  ❌ {symbol}: 所有数据源均获取失败")
+    print(f"  ❌ {symbol}: Binance/Bybit 均获取失败")
     return None
 
 
