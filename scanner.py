@@ -50,8 +50,45 @@ BINANCE_ENDPOINTS = [
     ('https://api.binance.us/api/v3/klines', 'https://api.binance.us/api/v3/klines', 'Binance-US'),
 ]
 
-# 备用：Bybit 数据源（ETHUSDT, BTCUSDT 等主流币）
+# Cloudflare Worker 代理（解决 GitHub Actions IP 被封问题）
+WORKER_PROXY = 'https://tradingview-feishu.hongji1142317442.workers.dev/binance-api'
+
+
 BYBIT_URL = 'https://api.bybit.com/v5/market/kline'
+
+
+def _parse_klines(data: list, source_label: str) -> pd.DataFrame:
+    """解析 Binance klines 格式数据"""
+    df = pd.DataFrame(data, columns=[
+        'timestamp', 'open', 'high', 'low', 'close', 'volume',
+        'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+        'taker_buy_quote', 'ignore'
+    ])
+    df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+    df['timestamp'] = df['timestamp'].astype('int64')
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    return df
+
+
+def _fetch_via_proxy(symbol: str, url: str, interval: str, limit: int) -> pd.DataFrame:
+    """通过 Cloudflare Worker 代理请求 Binance API"""
+    try:
+        full_url = WORKER_PROXY + '?url=' + requests.utils.quote(
+            url + '?' + requests.utils.urlencode({
+                'symbol': symbol, 'interval': interval, 'limit': limit
+            })
+        )
+        resp = requests.get(full_url, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and len(data) > 0:
+                df = _parse_klines(data, f'Worker代理')
+                print(f"  ✅ Worker代理: {symbol} {len(df)} 根K线")
+                return df
+    except Exception:
+        pass
+    return None
 
 
 def _fetch_binance(symbol: str, interval: str, limit: int) -> pd.DataFrame:
@@ -66,16 +103,7 @@ def _fetch_binance(symbol: str, interval: str, limit: int) -> pd.DataFrame:
                     data = resp.json()
                     if isinstance(data, list) and len(data) > 0:
                         print(f"  ✅ {label}: {symbol} {len(data)} 根K线")
-                        df = pd.DataFrame(data, columns=[
-                            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-                            'taker_buy_quote', 'ignore'
-                        ])
-                        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-                        df['timestamp'] = df['timestamp'].astype('int64')
-                        for col in ['open', 'high', 'low', 'close', 'volume']:
-                            df[col] = pd.to_numeric(df[col], errors='coerce')
-                        return df
+                        return _parse_klines(data, label)
                 elif resp.status_code == 400:
                     break  # 交易对不存在，换节点
             except Exception:
@@ -125,12 +153,20 @@ def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 300) -> pd.Dat
     """
     interval = TIMEFRAME_MAP.get(timeframe, '15m')
 
-    # 1. 尝试 Binance 所有节点
+    # 1. 尝试 Binance 所有节点（直连）
     df = _fetch_binance(symbol, interval, limit)
     if df is not None:
         return df
 
-    # 2. 备用：Bybit（主流币）
+    # 2. 通过 Cloudflare Worker 代理（解决 GitHub Actions IP 被封）
+    df = _fetch_via_proxy(symbol, 'https://fapi.binance.com/fapi/v1/klines', interval, limit)
+    if df is not None:
+        return df
+    df = _fetch_via_proxy(symbol, 'https://api.binance.com/api/v3/klines', interval, limit)
+    if df is not None:
+        return df
+
+    # 3. 备用：Bybit（仅主流币有）
     df = _fetch_bybit(symbol, interval, limit)
     if df is not None:
         return df
@@ -161,7 +197,8 @@ def scan_symbol(symbol: str) -> List[Signal]:
         print(f"  ⚠️ {symbol} 数据不足，跳过")
         return []
 
-    print(f"  获取到 {len(df)} 根K线 | 最新: {datetime.fromtimestamp(df['timestamp'].iloc[-1]/1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} | 收盘: {df['close'].iloc[-1]:.4f}")
+    ts = datetime.fromtimestamp(int(df['timestamp'].iloc[-1]) / 1000, tz=timezone.utc)
+    print(f"  最新K线: {ts.strftime('%Y-%m-%d %H:%M UTC')} | 收盘: {df['close'].iloc[-1]:.4f}")
 
     # 2. 初始化指标
     smart_money = SmartMoneyConcepts(
