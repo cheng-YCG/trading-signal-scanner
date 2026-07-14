@@ -9,7 +9,10 @@
 import sys
 import io
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# 北京时间 (UTC+8)
+BEIJING_TZ = timezone(timedelta(hours=8))
 from typing import Dict, List
 
 # 修复 Windows 控制台编码问题
@@ -71,19 +74,16 @@ def _parse_klines(data: list, source_label: str) -> pd.DataFrame:
     return df
 
 
-def _fetch_via_proxy(symbol: str, url: str, interval: str, limit: int) -> pd.DataFrame:
+def _fetch_via_proxy(symbol: str, interval: str, limit: int) -> pd.DataFrame:
     """通过 Cloudflare Worker 代理请求 Binance API"""
     try:
-        full_url = WORKER_PROXY + '?url=' + requests.utils.quote(
-            url + '?' + requests.utils.urlencode({
-                'symbol': symbol, 'interval': interval, 'limit': limit
-            })
-        )
-        resp = requests.get(full_url, timeout=15)
+        resp = requests.get(WORKER_PROXY, params={
+            'symbol': symbol, 'interval': interval, 'limit': limit
+        }, timeout=15)
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list) and len(data) > 0:
-                df = _parse_klines(data, f'Worker代理')
+                df = _parse_klines(data, 'Worker代理')
                 print(f"  ✅ Worker代理: {symbol} {len(df)} 根K线")
                 return df
     except Exception:
@@ -158,11 +158,8 @@ def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 300) -> pd.Dat
     if df is not None:
         return df
 
-    # 2. 通过 Cloudflare Worker 代理（解决 GitHub Actions IP 被封）
-    df = _fetch_via_proxy(symbol, 'https://fapi.binance.com/fapi/v1/klines', interval, limit)
-    if df is not None:
-        return df
-    df = _fetch_via_proxy(symbol, 'https://api.binance.com/api/v3/klines', interval, limit)
+    # 2. 通过 Cloudflare Worker 代理
+    df = _fetch_via_proxy(symbol, interval, limit)
     if df is not None:
         return df
 
@@ -197,8 +194,8 @@ def scan_symbol(symbol: str) -> List[Signal]:
         print(f"  ⚠️ {symbol} 数据不足，跳过")
         return []
 
-    ts = datetime.fromtimestamp(int(df['timestamp'].iloc[-1]) / 1000, tz=timezone.utc)
-    print(f"  最新K线: {ts.strftime('%Y-%m-%d %H:%M UTC')} | 收盘: {df['close'].iloc[-1]:.4f}")
+    ts = datetime.fromtimestamp(int(df['timestamp'].iloc[-1]) / 1000, tz=BEIJING_TZ)
+    print(f"  最新K线: {ts.strftime('%Y-%m-%d %H:%M 北京时间')} | 收盘: {df['close'].iloc[-1]:.4f}")
 
     # 2. 初始化指标
     smart_money = SmartMoneyConcepts(
@@ -230,7 +227,7 @@ def main():
     print(f"╔══════════════════════════════════════════╗")
     print(f"║  交易信号扫描器 v1.0                      ║")
     print(f"║  周期: {TIMEFRAME} | 交易对: {len(SYMBOLS)}个       ║")
-    print(f"║  时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}          ║")
+    print(f"║  时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M 北京时间')}          ║")
     print(f"╚══════════════════════════════════════════╝")
 
     # 诊断：检查飞书 Webhook 是否配置
@@ -258,8 +255,8 @@ def main():
         print(f"\n  🚀 推送信号到飞书...")
         success_count = 0
         for sig in total_signals:
-            ts = datetime.fromtimestamp(sig.timestamp / 1000, tz=timezone.utc)
-            ts_str = ts.strftime('%Y-%m-%d %H:%M UTC')
+            ts = datetime.fromtimestamp(sig.timestamp / 1000, tz=BEIJING_TZ)
+            ts_str = ts.strftime('%Y-%m-%d %H:%M 北京时间')
 
             ok = send_signal(
                 symbol=sig.symbol,
