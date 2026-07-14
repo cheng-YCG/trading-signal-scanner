@@ -69,10 +69,14 @@ WORKER_PROXY = 'https://tradingview-feishu.hongji1142317442.workers.dev/binance-
 BYBIT_URL = 'https://api.bybit.com/v5/market/kline'
 OKX_URL = 'https://www.okx.com/api/v5/market/candles'
 
-# OKX 交易对映射（仅主流币，股票代币OKX没有）
+# OKX 交易对映射（公开API，GitHub Actions 不封）
 OKX_SYMBOLS = {
     'ETHUSDT': 'ETH-USDT-SWAP',
     'BTCUSDT': 'BTC-USDT-SWAP',
+    'SKHYNIXUSDT': 'SKHYNIX-USDT-SWAP',
+    'SOXLUSDT': 'SOXL-USDT-SWAP',
+    'SNDKUSDT': 'SNDK-USDT-SWAP',
+    'CLUSDT': 'CL-USDT-SWAP',
 }
 
 # OKX K线周期映射
