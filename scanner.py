@@ -21,7 +21,7 @@ import requests
 import pandas as pd
 
 from config import (
-    SYMBOLS, TIMEFRAME, LOOKBACK_BARS,
+    SYMBOLS, TIMEFRAME, LOOKBACK_BARS, FEISHU_WEBHOOK_URL,
     SWING_LENGTH, INTERNAL_LENGTH,
     PIVOT_PERIOD, CHANNEL_WIDTH_PCT, MIN_STRENGTH, MAX_SR, LOOPBACK,
 )
@@ -149,6 +149,13 @@ def main():
     print(f"║  周期: {TIMEFRAME} | 交易对: {len(SYMBOLS)}个       ║")
     print(f"║  时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}          ║")
     print(f"╚══════════════════════════════════════════╝")
+
+    # 诊断：检查飞书 Webhook 是否配置
+    if FEISHU_WEBHOOK_URL:
+        masked = FEISHU_WEBHOOK_URL[:30] + '...' + FEISHU_WEBHOOK_URL[-10:]
+        print(f"📡 飞书 Webhook: {masked}")
+    else:
+        print(f"⚠️  飞书 Webhook 未配置！请在 GitHub Secrets 中设置 FEISHU_WEBHOOK_URL")
 
     total_signals = []
 

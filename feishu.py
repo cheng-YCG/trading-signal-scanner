@@ -24,15 +24,12 @@ def send_signal(symbol: str, signal_label: str, direction: str,
                 price: float, timestamp_str: str, interval: str = "15"):
     """
     发送交易信号到飞书群
-
-    Args:
-        symbol: 交易对名称
-        signal_label: 信号中文描述
-        direction: 'long' / 'short' / 'neutral'
-        price: 触发价格
-        timestamp_str: 时间字符串
-        interval: K线周期（分钟）
     """
+    # 检查 Webhook URL
+    if not FEISHU_WEBHOOK_URL:
+        print(f"  ⚠️ 飞书 Webhook URL 未设置，跳过推送: {signal_label}")
+        print(f"     请在 GitHub Secrets 中设置 FEISHU_WEBHOOK_URL")
+        return False
     color = SIGNAL_COLORS.get(direction, 'blue')
     direction_text = DIRECTION_LABEL.get(direction, direction)
     emoji = {'long': '🟢', 'short': '🔴', 'neutral': '🔵'}.get(direction, 'ℹ️')
