@@ -226,60 +226,60 @@ class SmartMoneyConcepts:
         if recent_high is None or recent_low is None:
             return signals
 
-        # 只检查最新一根已完成的K线（避免重复推送）
-        # n-2 = 最新已完成K线, n-1 = 当前未完成K线
-        check_start = max(0, n - 2)
-        start = check_start
+        prefix = 'Swing' if not is_internal else 'Internal'
+        trend = self.swing_trend if not is_internal else self.internal_trend
 
-        for i in range(start, n):
+        # 检查最近5根已完成K线（股票代币波动低，单根K线难触发）
+        check_start = max(0, n - 6)
+
+        for i in range(check_start, n):
             # 看涨突破：收盘价突破前一个摆动高点
-            if not self._prev_swing_high_crossed and not is_internal:
-                if close[i] > recent_high.price:
-                    tag = 'CHoCH' if self.swing_trend == Direction.BEARISH else 'BOS'
-                    prefix = 'Swing' if not is_internal else 'Internal'
-                    signals.append(Signal(
-                        symbol='',
-                        signal_name=f'Bullish {tag}',
-                        signal_label=f'看涨 {tag}（{"Swing" if not is_internal else "Internal"}结构）',
-                        direction='long',
-                        price=float(close[i]),
-                        timestamp=int(timestamp[i])
-                    ))
+            if close[i] > recent_high.price:
+                tag = 'CHoCH' if trend == Direction.BEARISH else 'BOS'
+                signals.append(Signal(
+                    symbol='',
+                    signal_name=f'Bullish {tag}',
+                    signal_label=f'看涨 {tag}（{prefix}结构）',
+                    direction='long',
+                    price=float(close[i]),
+                    timestamp=int(timestamp[i])
+                ))
 
-                    # 创建看涨 Order Block
-                    if not is_internal:
-                        self._create_order_block(
-                            high, low, timestamp, recent_high.bar_index,
-                            Direction.BULLISH, is_internal
-                        )
+                # 创建看涨 Order Block
+                self._create_order_block(
+                    high, low, timestamp, recent_high.bar_index,
+                    Direction.BULLISH, is_internal
+                )
 
-                    if not is_internal:
-                        self._prev_swing_high_crossed = True
+                if not is_internal:
                     self.swing_trend = Direction.BULLISH
+                else:
+                    self.internal_trend = Direction.BULLISH
+                break  # 只取最新信号
 
             # 看跌突破：收盘价跌破前一个摆动低点
-            if not self._prev_swing_low_crossed and not is_internal:
-                if close[i] < recent_low.price:
-                    tag = 'CHoCH' if self.swing_trend == Direction.BULLISH else 'BOS'
-                    signals.append(Signal(
-                        symbol='',
-                        signal_name=f'Bearish {tag}',
-                        signal_label=f'看跌 {tag}（{"Swing" if not is_internal else "Internal"}结构）',
-                        direction='short',
-                        price=float(close[i]),
-                        timestamp=int(timestamp[i])
-                    ))
+            if close[i] < recent_low.price:
+                tag = 'CHoCH' if trend == Direction.BULLISH else 'BOS'
+                signals.append(Signal(
+                    symbol='',
+                    signal_name=f'Bearish {tag}',
+                    signal_label=f'看跌 {tag}（{prefix}结构）',
+                    direction='short',
+                    price=float(close[i]),
+                    timestamp=int(timestamp[i])
+                ))
 
-                    # 创建看跌 Order Block
-                    if not is_internal:
-                        self._create_order_block(
-                            high, low, timestamp, recent_low.bar_index,
-                            Direction.BEARISH, is_internal
-                        )
+                # 创建看跌 Order Block
+                self._create_order_block(
+                    high, low, timestamp, recent_low.bar_index,
+                    Direction.BEARISH, is_internal
+                )
 
-                    if not is_internal:
-                        self._prev_swing_low_crossed = True
+                if not is_internal:
                     self.swing_trend = Direction.BEARISH
+                else:
+                    self.internal_trend = Direction.BEARISH
+                break
 
         return signals
 
@@ -313,8 +313,8 @@ class SmartMoneyConcepts:
     ) -> List[Signal]:
         """检测 Order Block 被突破"""
         signals = []
-        # 只检测最新已完成K线
-        check_start = max(0, n - 2)
+        # 检查最近5根K线
+        check_start = max(0, n - 6)
         start = check_start
 
         # 检查 Internal OB
