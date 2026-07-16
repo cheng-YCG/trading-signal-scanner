@@ -250,10 +250,10 @@ class SmartMoneyConcepts:
         prefix = 'Swing' if not is_internal else 'Internal'
         trend = self.swing_trend if not is_internal else self.internal_trend
 
-        # 检查最近5根已完成K线（股票代币波动低，单根K线难触发）
-        check_start = max(0, n - 6)
+        # 从最新K线往前扫（取最近信号）
+        check_start = max(0, n - 16)
 
-        for i in range(check_start, n):
+        for i in range(n - 2, check_start - 1, -1):
             # 看涨突破：收盘价突破前一个摆动高点
             if close[i] > recent_high.price:
                 tag = 'CHoCH' if trend == Direction.BEARISH else 'BOS'
@@ -265,18 +265,15 @@ class SmartMoneyConcepts:
                     price=float(close[i]),
                     timestamp=int(timestamp[i])
                 ))
-
-                # 创建看涨 Order Block
                 self._create_order_block(
                     high, low, timestamp, recent_high.bar_index,
                     Direction.BULLISH, is_internal
                 )
-
                 if not is_internal:
                     self.swing_trend = Direction.BULLISH
                 else:
                     self.internal_trend = Direction.BULLISH
-                break  # 只取最新信号
+                break
 
             # 看跌突破：收盘价跌破前一个摆动低点
             if close[i] < recent_low.price:
@@ -289,13 +286,10 @@ class SmartMoneyConcepts:
                     price=float(close[i]),
                     timestamp=int(timestamp[i])
                 ))
-
-                # 创建看跌 Order Block
                 self._create_order_block(
                     high, low, timestamp, recent_low.bar_index,
                     Direction.BEARISH, is_internal
                 )
-
                 if not is_internal:
                     self.swing_trend = Direction.BEARISH
                 else:
