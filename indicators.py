@@ -64,39 +64,60 @@ class Signal:
 
 def find_pivots(high: np.ndarray, low: np.ndarray, period: int) -> Tuple[List[SwingPivot], List[SwingPivot]]:
     """
-    检测枢轴高低点
+    检测枢轴高低点。
+    核心改进：右侧不再要求 period 根K线确认，避免 12 小时延迟。
+    当 i 靠近右边界时，只检查左侧 period 根 + 右侧已有的K线。
     返回 (pivot_highs, pivot_lows)
     """
     pivot_highs = []
     pivot_lows = []
     n = len(high)
 
-    for i in range(period, n - period):
-        # Pivot High: 当前 high 是周围 period 根K线的最高点
+    for i in range(period, n - 1):  # n-1 跳过当前未完成K线
+        # 右侧可用K线数（最多 period 根）
+        right_bars = min(period, n - 1 - i)
+
+        # Pivot High
         is_ph = True
-        for j in range(i - period, i + period + 1):
-            if j == i:
+        # 左侧必须全部低于当前高点
+        for j in range(i - period, i):
+            if j < 0 or j >= n:
                 continue
             if high[j] >= high[i]:
                 is_ph = False
                 break
+        # 右侧需要 right_bars 根都没有更高
+        if is_ph:
+            for j in range(i + 1, i + 1 + right_bars):
+                if j >= n:
+                    break
+                if high[j] > high[i]:
+                    is_ph = False
+                    break
 
         if is_ph:
             pivot_highs.append(SwingPivot(
                 price=float(high[i]),
                 bar_index=i,
-                timestamp=0,  # 后续填入
-                level_type='HH'  # 初始标记，后续根据上下文修正
+                timestamp=0,
+                level_type='HH'
             ))
 
-        # Pivot Low: 当前 low 是周围 period 根K线的最低点
+        # Pivot Low
         is_pl = True
-        for j in range(i - period, i + period + 1):
-            if j == i:
+        for j in range(i - period, i):
+            if j < 0 or j >= n:
                 continue
             if low[j] <= low[i]:
                 is_pl = False
                 break
+        if is_pl:
+            for j in range(i + 1, i + 1 + right_bars):
+                if j >= n:
+                    break
+                if low[j] < low[i]:
+                    is_pl = False
+                    break
 
         if is_pl:
             pivot_lows.append(SwingPivot(
