@@ -9,11 +9,16 @@
 import sys
 import io
 import time
+import os
+import json
 from datetime import datetime, timezone, timedelta
 from time import sleep
 
 # 北京时间 (UTC+8)
 BEIJING_TZ = timezone(timedelta(hours=8))
+
+# 信号去重文件
+SENT_SIGNALS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sent_signals.json')
 from typing import Dict, List
 
 # 修复 Windows 控制台编码问题
@@ -313,9 +318,17 @@ def main():
     print(f"📊 扫描完成: {len(total_signals)} 个信号")
 
     if total_signals:
-        print(f"\n  🚀 推送信号到飞书...")
+        # 去重：过滤2小时内已发送的信号
+        sent = load_sent_signals()
+        new_signals = [s for s in total_signals if signal_key(s) not in sent]
+
+        if not new_signals:
+            print(f"\n  💤 无新信号（{len(total_signals)}个已发送过）")
+            return
+
+        print(f"\n  🚀 推送{len(new_signals)}个新信号到飞书（跳过{len(total_signals) - len(new_signals)}个重复）...")
         success_count = 0
-        for sig in total_signals:
+        for sig in new_signals:
             ts = datetime.fromtimestamp(sig.timestamp / 1000, tz=BEIJING_TZ)
             ts_str = ts.strftime('%Y-%m-%d %H:%M 北京时间')
 
@@ -329,12 +342,50 @@ def main():
             )
             if ok:
                 success_count += 1
+                sent.add(signal_key(sig))
+                sleep(2)  # 飞书限频：每条消息间隔2秒
 
-        print(f"\n  ✅ 成功推送: {success_count}/{len(total_signals)}")
+        save_sent_signals(sent)
+        print(f"\n  ✅ 成功推送: {success_count}/{len(new_signals)}")
     else:
         print(f"\n  💤 本轮无信号")
 
     print(f"\n  下次扫描: 15分钟后")
+
+
+# ============================================================
+# 信号去重
+# ============================================================
+
+def load_sent_signals() -> set:
+    """加载已发送信号记录"""
+    try:
+        if os.path.exists(SENT_SIGNALS_FILE):
+            with open(SENT_SIGNALS_FILE, 'r') as f:
+                data = json.load(f)
+            # 只保留最近2小时的记录
+            cutoff = datetime.now(BEIJING_TZ).timestamp() - 7200
+            recent = {k for k, v in data.items() if v > cutoff}
+            return recent
+    except Exception:
+        pass
+    return set()
+
+
+def save_sent_signals(signals: set):
+    """保存已发送信号记录"""
+    ts = datetime.now(BEIJING_TZ).timestamp()
+    data = {k: ts for k in signals}
+    try:
+        with open(SENT_SIGNALS_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def signal_key(signal: Signal) -> str:
+    """生成信号唯一标识"""
+    return f"{signal.symbol}|{signal.signal_name}|{signal.timestamp}"
 
 
 # ============================================================

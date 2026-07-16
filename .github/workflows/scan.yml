@@ -2,8 +2,8 @@ name: 交易信号扫描
 
 on:
   schedule:
-    # 每15分钟运行一次 (UTC时间)
-    - cron: '*/15 * * * *'
+    # 每5分钟运行一次 (UTC时间)
+    - cron: '*/5 * * * *'
   # 允许手动触发
   workflow_dispatch:
 

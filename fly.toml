@@ -1,0 +1,9 @@
+app = "trading-signal-scanner"
+primary_region = "ams"
+
+# 敏感信息不要写在这里，部署后用 fly secrets set 设置
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

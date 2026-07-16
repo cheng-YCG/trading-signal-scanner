@@ -11,7 +11,6 @@ SYMBOLS = [
     "SKHYNIXUSDT",
     "SOXLUSDT",
     "SNDKUSDT",
-    "CLUSDT",
 ]
 
 # ============================================================
