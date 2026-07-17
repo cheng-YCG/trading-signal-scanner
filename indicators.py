@@ -64,38 +64,17 @@ class Signal:
 
 def find_pivots(high: np.ndarray, low: np.ndarray, period: int) -> Tuple[List[SwingPivot], List[SwingPivot]]:
     """
-    检测枢轴高低点。
-    核心改进：右侧不再要求 period 根K线确认，避免 12 小时延迟。
-    当 i 靠近右边界时，只检查左侧 period 根 + 右侧已有的K线。
-    返回 (pivot_highs, pivot_lows)
+    检测枢轴高低点 — 纯左侧确认，不等待右侧。
+    每根已完成K线立刻判断是否为枢轴点。
     """
     pivot_highs = []
     pivot_lows = []
     n = len(high)
 
-    for i in range(period, n - 1):  # n-1 跳过当前未完成K线
-        # 右侧可用K线数（最多 period 根）
-        right_bars = min(period, n - 1 - i)
-
-        # Pivot High
-        is_ph = True
-        # 左侧必须全部低于当前高点
-        for j in range(i - period, i):
-            if j < 0 or j >= n:
-                continue
-            if high[j] >= high[i]:
-                is_ph = False
-                break
-        # 右侧需要 right_bars 根都没有更高
-        if is_ph:
-            for j in range(i + 1, i + 1 + right_bars):
-                if j >= n:
-                    break
-                if high[j] > high[i]:
-                    is_ph = False
-                    break
-
-        if is_ph:
+    for i in range(period, n - 1):  # n-1 = 跳过当前未完成K线
+        # Pivot High: 当前high是左侧 period 根K线中的最高点
+        left_slice = high[i - period:i]
+        if high[i] > np.max(left_slice):
             pivot_highs.append(SwingPivot(
                 price=float(high[i]),
                 bar_index=i,
@@ -103,23 +82,9 @@ def find_pivots(high: np.ndarray, low: np.ndarray, period: int) -> Tuple[List[Sw
                 level_type='HH'
             ))
 
-        # Pivot Low
-        is_pl = True
-        for j in range(i - period, i):
-            if j < 0 or j >= n:
-                continue
-            if low[j] <= low[i]:
-                is_pl = False
-                break
-        if is_pl:
-            for j in range(i + 1, i + 1 + right_bars):
-                if j >= n:
-                    break
-                if low[j] < low[i]:
-                    is_pl = False
-                    break
-
-        if is_pl:
+        # Pivot Low: 当前low是左侧 period 根K线中的最低点
+        left_slice_low = low[i - period:i]
+        if low[i] < np.min(left_slice_low):
             pivot_lows.append(SwingPivot(
                 price=float(low[i]),
                 bar_index=i,
@@ -239,62 +204,52 @@ class SmartMoneyConcepts:
     ) -> List[Signal]:
         """处理结构突破检测"""
         signals = []
-
-        # 获取最近的枢轴高点和低点
-        recent_high = pivot_highs[-1] if pivot_highs else None
-        recent_low = pivot_lows[-1] if pivot_lows else None
-
-        if recent_high is None or recent_low is None:
+        if not pivot_highs or not pivot_lows:
             return signals
 
         prefix = 'Swing' if not is_internal else 'Internal'
         trend = self.swing_trend if not is_internal else self.internal_trend
 
-        # 从最新K线往前扫（取最近信号）
-        check_start = max(0, n - 16)
+        # 从最新的几个枢轴点中找突破（倒序，最新优先）
+        for ph in reversed(pivot_highs[-10:]):
+            # 看涨突破：收盘价突破枢轴高点，且必须在枢轴形成之后
+            for i in range(n - 2, ph.bar_index, -1):
+                if close[i] > ph.price:
+                    tag = 'CHoCH' if trend == Direction.BEARISH else 'BOS'
+                    signals.append(Signal(
+                        symbol='',
+                        signal_name=f'Bullish {tag}',
+                        signal_label=f'看涨 {tag}（{prefix}结构）',
+                        direction='long',
+                        price=float(close[i]),
+                        timestamp=int(timestamp[i])
+                    ))
+                    self._create_order_block(high, low, timestamp, ph.bar_index, Direction.BULLISH, is_internal)
+                    if not is_internal:
+                        self.swing_trend = Direction.BULLISH
+                    else:
+                        self.internal_trend = Direction.BULLISH
+                    return signals
 
-        for i in range(n - 2, check_start - 1, -1):
-            # 看涨突破：收盘价突破前一个摆动高点
-            if close[i] > recent_high.price:
-                tag = 'CHoCH' if trend == Direction.BEARISH else 'BOS'
-                signals.append(Signal(
-                    symbol='',
-                    signal_name=f'Bullish {tag}',
-                    signal_label=f'看涨 {tag}（{prefix}结构）',
-                    direction='long',
-                    price=float(close[i]),
-                    timestamp=int(timestamp[i])
-                ))
-                self._create_order_block(
-                    high, low, timestamp, recent_high.bar_index,
-                    Direction.BULLISH, is_internal
-                )
-                if not is_internal:
-                    self.swing_trend = Direction.BULLISH
-                else:
-                    self.internal_trend = Direction.BULLISH
-                break
-
-            # 看跌突破：收盘价跌破前一个摆动低点
-            if close[i] < recent_low.price:
-                tag = 'CHoCH' if trend == Direction.BULLISH else 'BOS'
-                signals.append(Signal(
-                    symbol='',
-                    signal_name=f'Bearish {tag}',
-                    signal_label=f'看跌 {tag}（{prefix}结构）',
-                    direction='short',
-                    price=float(close[i]),
-                    timestamp=int(timestamp[i])
-                ))
-                self._create_order_block(
-                    high, low, timestamp, recent_low.bar_index,
-                    Direction.BEARISH, is_internal
-                )
-                if not is_internal:
-                    self.swing_trend = Direction.BEARISH
-                else:
-                    self.internal_trend = Direction.BEARISH
-                break
+        for pl in reversed(pivot_lows[-10:]):
+            # 看跌突破：收盘价跌破枢轴低点
+            for i in range(n - 2, pl.bar_index, -1):
+                if close[i] < pl.price:
+                    tag = 'CHoCH' if trend == Direction.BULLISH else 'BOS'
+                    signals.append(Signal(
+                        symbol='',
+                        signal_name=f'Bearish {tag}',
+                        signal_label=f'看跌 {tag}（{prefix}结构）',
+                        direction='short',
+                        price=float(close[i]),
+                        timestamp=int(timestamp[i])
+                    ))
+                    self._create_order_block(high, low, timestamp, pl.bar_index, Direction.BEARISH, is_internal)
+                    if not is_internal:
+                        self.swing_trend = Direction.BEARISH
+                    else:
+                        self.internal_trend = Direction.BEARISH
+                    return signals
 
         return signals
 
